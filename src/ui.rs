@@ -17,6 +17,10 @@ pub async fn index() -> impl IntoResponse {
     )
 }
 
+/// @cc [owner:ghuntley,label:security] admin-token-gate
+/// Every `/admin/api/*` route MUST be rejected with 401 unless the `Authorization` header carries
+/// exactly `Bearer <ui_token>`; the HTML page at `/` MUST stay reachable without a token so the
+/// token can be entered in the UI.
 pub async fn require_ui_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,

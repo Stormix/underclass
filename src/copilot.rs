@@ -42,6 +42,9 @@ pub enum AuthError {
     SlowDown { interval: Option<u64> },
 }
 
+/// @cc [owner:ghuntley,label:proxy] copilot-enterprise-url-rewrite
+/// Copilot requests for an account with an `enterprise_url` MUST target
+/// `https://copilot-api.<domain>`; all others MUST target `https://api.githubcopilot.com`.
 fn api_base(account: &Account) -> String {
     match &account.enterprise_url {
         Some(url) => {
@@ -128,6 +131,11 @@ pub async fn fetch_catalog(client: &Client, account: &Account, token: &str) -> R
     Ok(parse_models_response(&body))
 }
 
+/// @cc [owner:ghuntley,label:pool] copilot-catalog-usability-filters
+/// `parse_models_response` MUST include a model only when its `policy.state` is not `disabled`,
+/// its `capabilities.limits` declare both `max_output_tokens` and `max_prompt_tokens`, and its
+/// capabilities report `tool_calls`; context MUST fall back to `max_prompt_tokens` when
+/// `max_context_window_tokens` is absent. Malformed entries MUST be skipped, never panic.
 pub fn parse_models_response(body: &Value) -> Vec<ModelInfo> {
     let Some(items) = body.get("data").and_then(|d| d.as_array()) else {
         return Vec::new();
@@ -212,6 +220,10 @@ pub async fn fetch_github_identity(client: &Client, token: &str) -> Option<Strin
     parse_github_user(&body)
 }
 
+/// @cc [owner:ghuntley,label:identity] copilot-onboarding-identity-label
+/// A completed Copilot device flow MUST create (or replace the tokens of) an account persisted to
+/// the store, labeled with the GitHub `login` (or display name) from `api.github.com/user`,
+/// falling back to the enterprise URL or `github` when identity is unavailable.
 pub async fn start_flow(
     client: Client,
     store: Arc<Store>,
@@ -340,6 +352,10 @@ impl Backend for CopilotBackend {
         format!("{}{}", self.base_for(account), path)
     }
 
+    /// @cc [owner:ghuntley,label:proxy] copilot-vision-header
+    /// Outbound Copilot requests MUST carry `Copilot-Vision-Request: true` exactly when the
+    /// request body contains image parts (`image_url`, `input_image`, or `image` typed objects),
+    /// and MUST NOT carry it for text-only bodies.
     fn inject_headers(
         &self,
         account: &Account,

@@ -40,6 +40,10 @@ pub fn extract_sticky_key(body: &Value, session_header: Option<&str>) -> Option<
         .filter(|s| !s.is_empty())
 }
 
+/// @cc [owner:ghuntley,label:security] proxy-key-gate
+/// When a proxy key is configured, requests to `/v1/*` MUST be rejected with 401 unless the
+/// `Authorization` header carries exactly `Bearer <proxy_key>`. When no key is configured
+/// (localhost-only mode) requests pass.
 pub async fn require_proxy_key(
     State(state): State<Arc<AppState>>,
     req: Request,
@@ -68,6 +72,9 @@ pub async fn require_proxy_key(
     next.run(req).await
 }
 
+/// @cc [owner:ghuntley,label:proxy] inflight-released-on-drop
+/// Dropping `InflightGuard` MUST decrement the guarded account's in-flight counter exactly once —
+/// including on early returns, error paths, and client-aborted streams.
 struct InflightGuard {
     pool: Arc<Mutex<PoolCore>>,
     account_id: String,
@@ -128,6 +135,10 @@ enum Attempt {
     Failover(Option<Response>),
 }
 
+/// @cc [owner:ghuntley,label:proxy] saturation-fail-fast-429
+/// When selection returns `Saturated`, `infer` MUST respond immediately with 429 and a
+/// `Retry-After` header equal to the seconds until the saturated `until_ms` deadline; it MUST
+/// NOT retry the request at that time.
 pub async fn infer(State(state): State<Arc<AppState>>, req: Request) -> Response {
     let started = Instant::now();
     let request_id = req
@@ -260,6 +271,13 @@ pub async fn infer(State(state): State<Arc<AppState>>, req: Request) -> Response
     )
 }
 
+/// @cc [owner:ghuntley,label:proxy] failover-bounded-by-accounts
+/// Each configured account MUST be attempted at most once per request, and the first successful
+/// upstream response MUST be returned to the client; upstream error bodies MUST be preserved and
+/// returned when every attempt fails (or a 503 `pool_exhausted` error when no upstream response
+/// was ever received). A 401 MUST trigger exactly one forced token refresh and one same-account
+/// retry per request; a second 401 (or a failed refresh) MUST classify the account `AuthFailed`
+/// and fail over.
 async fn attempt_account(
     state: &Arc<AppState>,
     request_id: &str,

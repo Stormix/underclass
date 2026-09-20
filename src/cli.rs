@@ -61,6 +61,10 @@ pub fn find_opencode_config(project: bool) -> PathBuf {
     global.join("opencode.json")
 }
 
+/// @cc [owner:ghuntley,label:cli] parse-jsonc-tolerant
+/// `parse_jsonc` MUST accept opencode configs containing `//` and `/* */` comments and trailing
+/// commas, MUST NOT alter values or commas inside string literals, and MUST fail with a message
+/// on genuinely invalid documents.
 pub fn parse_jsonc(text: &str) -> Result<Value, String> {
     let mut stripped = json_comments::StripComments::new(text.as_bytes());
     let mut cleaned = String::new();
@@ -146,6 +150,10 @@ pub fn provider_block(base_url: &str, api_key: &str, models: &[crate::models::Mo
     })
 }
 
+/// @cc [owner:ghuntley,label:cli] connect-merge-idempotent-preserves-unrelated
+/// `merge_provider` MUST be idempotent (merging twice yields the same document), MUST preserve
+/// every unrelated key including other providers, and MUST remove a stale `underclass/*` default
+/// model when no default model is requested.
 pub fn merge_provider(doc: &mut Value, block: &Value, default_model: Option<&str>) {
     if !doc.is_object() {
         *doc = serde_json::json!({});
@@ -206,6 +214,9 @@ pub fn remove_auth(doc: &mut Value) {
     }
 }
 
+/// @cc [owner:ghuntley,label:cli] connect-backup-before-write
+/// `write_with_backup` MUST copy an existing file to `<path>.bak` before overwriting it, and MUST
+/// NOT leave the original truncated or missing on failure.
 fn write_with_backup(path: &PathBuf, contents: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;

@@ -1,0 +1,20 @@
+@cc [owner:ghuntley,label:security] no-secret-logging
+Credentials, access/refresh tokens, authorization headers, and request bodies (full prompts) MUST NOT be logged or emitted in errors, spans, or the request ring buffer.
+
+@cc [owner:ghuntley,label:security] credential-storage
+OAuth credentials and minted keys MUST be persisted only to the underclass SQLite store or the opencode auth.json written by `underclass connect`; auth.json MUST be created/updated with 0600 permissions. Credentials and pool.db MUST NOT be committed to the repository.
+
+@cc [owner:ghuntley,label:logging] identity-formatting
+Account identity in logs and the request ring buffer MUST use the account label (email/username) in full; raw UUID account IDs MUST be truncated to their first 8 characters. `src/logging.rs` is the only place that formats identity for logs.
+
+@cc [owner:ghuntley,label:architecture] pure-sync-core
+`src/pool.rs` and `src/health.rs` MUST remain pure and synchronous: no tokio, no I/O, no wall-clock access — time enters as an injected `now_ms` parameter. Property tests in `tests/properties.rs` depend on this.
+
+@cc [owner:ghuntley,label:proxy] pre-first-byte-failover
+Failover across pool accounts MUST happen only before the first upstream response byte. Once a response stream has started, upstream errors MUST pass through to the client and MUST NOT be retried on another account.
+
+@cc [owner:ghuntley,label:architecture] backend-agnostic-core
+Pool routing, health classification, and stickiness MUST NOT special-case any backend by name; all backend differences MUST live behind `provider::Backend` implementations registered in the backend map.
+
+@cc [owner:ghuntley,label:proxy] outbound-credential-stripping
+Outbound upstream requests MUST carry only proxy-injected credentials (the selected account's token); client-supplied authorization headers MUST NOT be forwarded upstream.

@@ -106,6 +106,9 @@ pub fn identity_from_token(token: &str) -> Option<String> {
     jwt::extract_email(&claims).or_else(|| jwt::extract_display_name(&claims))
 }
 
+/// @cc [owner:ghuntley,label:auth] codex-refresh-rotates
+/// A successful Codex token refresh MUST return a fresh `refresh_token` along with the access
+/// token; the previous refresh token MUST be considered invalidated by the caller.
 pub async fn refresh(client: &Client, refresh_token: &str) -> Result<TokenResponse, AuthError> {
     let resp = client
         .post(format!("{ISSUER}/oauth/token"))
@@ -122,6 +125,10 @@ pub async fn refresh(client: &Client, refresh_token: &str) -> Result<TokenRespon
     Ok(resp.json().await?)
 }
 
+/// @cc [owner:ghuntley,label:identity] codex-onboarding-identity-label
+/// A completed Codex device flow MUST create (or replace the tokens of) a `Healthy` account
+/// persisted to the store, labeled with the email or display name from the exchanged token's JWT
+/// claims, falling back to `chatgpt` when no identity is present.
 pub async fn start_flow(
     client: Client,
     store: Arc<Store>,
@@ -238,6 +245,9 @@ impl Backend for CodexBackend {
         self.cooldown_ms
     }
 
+    /// @cc [owner:ghuntley,label:proxy] codex-store-false
+    /// Every outbound Codex request body MUST have `store` set to `false`; the upstream endpoint
+    /// rejects requests otherwise.
     fn prepare_body(&self, body: &mut Value) {
         if let Some(obj) = body.as_object_mut() {
             obj.insert("store".to_string(), Value::Bool(false));
@@ -252,6 +262,11 @@ impl Backend for CodexBackend {
         }
     }
 
+    /// @cc [owner:ghuntley,label:auth] codex-header-injection
+    /// Outbound Codex requests MUST carry `Authorization: Bearer <account access token>`, and,
+    /// when known on the account, the `ChatGPT-Account-Id` and
+    /// `x-openai-internal-codex-residency` headers, plus `originator: opencode`. No
+    /// client-supplied credential may survive into these headers.
     fn inject_headers(
         &self,
         account: &Account,

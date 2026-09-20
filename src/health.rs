@@ -3,6 +3,10 @@ use crate::models::{BackendId, Outcome};
 pub const RETRY_AFTER_MS_HEADER: &str = "retry-after-ms";
 pub const RETRY_AFTER_HEADER: &str = "retry-after";
 
+/// @cc [owner:ghuntley,label:pool] retry-after-absolute-deadline
+/// `parse_retry_after_headers` MUST return the upstream deadline as an absolute epoch-millisecond
+/// value (honoring `retry-after-ms`, then seconds-valued and HTTP-date `retry-after`), and MUST
+/// return `None` when neither header is present or parseable.
 pub fn parse_retry_after_headers(headers: &http::HeaderMap, now_ms: i64) -> Option<i64> {
     if let Some(v) = headers.get(RETRY_AFTER_MS_HEADER).and_then(|v| v.to_str().ok()) {
         if let Ok(ms) = v.trim().parse::<f64>() {
@@ -40,6 +44,11 @@ pub fn codex_quota_body(body: &str) -> bool {
     NEEDLES.iter().any(|n| lower.contains(&n.to_ascii_lowercase()))
 }
 
+/// @cc [owner:ghuntley,label:pool] classify-quota-auth-transient
+/// `classify` MUST return `QuotaExhausted` (with the `retry-after` deadline or, absent one,
+/// `now_ms + default_cooldown_ms`) for status 429 or any body containing a quota-class error code;
+/// `AuthFailed` for 401/403 (absent a quota body); `Transient` for 5xx; and `Ok` otherwise — for
+/// every backend.
 pub fn classify(
     backend: BackendId,
     status: u16,

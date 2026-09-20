@@ -52,6 +52,10 @@ fn serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>
     runtime.block_on(async_serve(bind_override))
 }
 
+/// @cc [owner:ghuntley,label:security] keys-minted-once
+/// The proxy API key and admin UI token MUST be minted on first run, persisted to the store, and
+/// reused on every subsequent start; an explicitly configured key/token MUST take precedence over
+/// minted ones.
 async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 

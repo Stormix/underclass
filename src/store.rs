@@ -173,6 +173,10 @@ impl Store {
         .expect("update status");
     }
 
+    /// @cc [owner:ghuntley,label:persistence] token-rotation-write-through
+    /// `update_tokens` MUST persist the new access token, expiry, and (when present) rotated
+    /// refresh token, ChatGPT account id, and residency immediately; a `None` refresh token MUST
+    /// leave the previously stored one intact.
     pub fn update_tokens(
         &self,
         id: &str,

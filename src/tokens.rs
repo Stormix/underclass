@@ -40,6 +40,10 @@ impl TokenManager {
             .clone()
     }
 
+    /// @cc [owner:ghuntley,label:auth] proactive-refresh-margin
+    /// `access_token` MUST return the cached Codex access token while it remains valid beyond
+    /// `PROACTIVE_REFRESH_MARGIN_MS` from expiry, and MUST force a refresh otherwise. For Copilot
+    /// it MUST return the stored GitHub token directly (it never expires or refreshes).
     pub async fn access_token(&self, account: &Account) -> Result<String, TokenError> {
         match account.backend {
             crate::models::BackendId::Copilot => account
@@ -57,6 +61,11 @@ impl TokenManager {
         }
     }
 
+    /// @cc [owner:ghuntley,label:auth] force-refresh-single-flight-and-rotation
+    /// `force_refresh` MUST serialize refreshes per account (single-flight lock), MUST NOT skip
+    /// the refresh based on a still-valid cached token (callers rely on it to recover from 401),
+    /// and MUST persist the rotated refresh token, new access token, expiry, and any newly
+    /// learned ChatGPT account id/residency to the store before returning the access token.
     pub async fn force_refresh(&self, account_id: &str) -> Result<String, TokenError> {
         let lock = self.lock_for(account_id).clone();
         let _guard = lock.lock().await;

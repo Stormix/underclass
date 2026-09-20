@@ -2,6 +2,9 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use serde_json::Value;
 
+/// @cc [owner:ghuntley,label:auth] jwt-malformed-returns-none
+/// `parse_jwt_claims` MUST return `None` — never panic — for tokens that are not three
+/// dot-separated segments, have a non-base64url payload, or decode to invalid JSON.
 pub fn parse_jwt_claims(token: &str) -> Option<Value> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {

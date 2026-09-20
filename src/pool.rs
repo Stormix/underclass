@@ -85,6 +85,10 @@ impl PoolCore {
         out
     }
 
+    /// @cc [owner:ghuntley,label:pool] sweep-readmits-expired-cooling
+    /// `sweep(now)` MUST return every account whose `Cooling` state has `reset_at <= now` back to
+    /// `Healthy` (eligible for selection again), and MUST evict sticky bindings older than
+    /// `BINDING_TTL_MS`. It MUST NOT touch Cooling accounts whose reset has not passed.
     pub fn sweep(&mut self, now: i64) -> Vec<String> {
         let mut readmitted = Vec::new();
         for state in self.accounts.values_mut() {
@@ -109,6 +113,14 @@ impl PoolCore {
         readmitted
     }
 
+    /// @cc [owner:ghuntley,label:pool] select-sticky-healthy-never-unhealthy
+    /// Selection MUST return, in priority order: (1) the account bound to the sticky key when it
+    /// is Healthy and serves the model (decision `StickyHit`); (2) on rebinding, a Healthy account
+    /// of the bound account's backend when one exists, else any Healthy eligible account; (3) for
+    /// sticky misses, the least-in-flight Healthy eligible account. It MUST NOT ever return an
+    /// account that is Cooling, AuthError, or Disabled. When no eligible Healthy account exists it
+    /// MUST fail with `Saturated { until_ms = min reset_at over eligible cooling accounts }` or,
+    /// if none are cooling, `NoAccounts`. Requests without a sticky key MUST NOT create bindings.
     pub fn select(&mut self, now: i64, sticky: Option<&str>, model: &str) -> Result<Selection, SelectError> {
         self.sweep(now);
         let backends: HashSet<BackendId> = self.eligible_backends(model).into_iter().collect();
@@ -199,6 +211,9 @@ impl PoolCore {
             .collect()
     }
 
+    /// @cc [owner:ghuntley,label:pool] inflight-saturating
+    /// `acquire` MUST increment and `release` decrement the account's in-flight counter with
+    /// saturating semantics: `release` MUST NOT move the counter below zero.
     pub fn acquire(&mut self, account_id: &str) {
         if let Some(s) = self.accounts.get_mut(account_id) {
             s.inflight = s.inflight.saturating_add(1);
@@ -211,6 +226,10 @@ impl PoolCore {
         }
     }
 
+    /// @cc [owner:ghuntley,label:pool] report-quota-transitions
+    /// `report` MUST transition the account to `Cooling { reset_at = until_ms }` on
+    /// `Outcome::QuotaExhausted` and to `AuthError` on `Outcome::AuthFailed`, and MUST NOT change
+    /// the account's status on `Outcome::Ok` or `Outcome::Transient`.
     pub fn report(&mut self, account_id: &str, outcome: Outcome) -> Option<AccountStatus> {
         let state = self.accounts.get_mut(account_id)?;
         let new_status = match outcome {

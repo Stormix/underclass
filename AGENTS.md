@@ -37,6 +37,14 @@ cargo run -- connect --remove
 - `auth.json` writes use `0600`. Never commit credentials or `pool.db`.
 - The proxy API key and admin UI token are minted on first run and stored in the DB; they gate `/v1/*` and `/admin/api/*` respectively.
 
+## Code contracts
+
+Use the `code-contracts` skill for every code change and code review. Follow its contract discovery, writing, and enforcement procedures before submitting commits or pull requests.
+
+- Repo-wide rules live in [`CONTRACTS`](CONTRACTS); declaration contracts use `/// @cc` doc comments on the narrowest relevant function.
+- `owner` is the account's GitHub username (`ghuntley`); never add `notify` unless explicitly requested.
+- Validate syntax and duplicate IDs with `cc-check format` (npm `@spolu/cc-check`); there is no automated semantic enforcement — verify prose against the implementation for every touched contract.
+
 ## ADR policy
 
 - Every non-trivial architectural decision gets a MADR record in `docs/adr/NNNN-title.md` (Status / Context / Decision / Consequences).
