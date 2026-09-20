@@ -2,6 +2,7 @@ pub mod cli;
 pub mod codex;
 pub mod config;
 pub mod copilot;
+pub mod correlation;
 pub mod flows;
 pub mod health;
 pub mod jwt;

@@ -162,7 +162,9 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
         ))
         .with_state(state.clone());
 
-    let app = axum::Router::new().nest("/v1", v1).with_state(state);
+    let app = axum::Router::new().nest("/v1", v1)
+        .layer(axum::middleware::from_fn(underclass::correlation::middleware))
+        .with_state(state);
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -192,12 +194,16 @@ async fn e2e_full_pool_story() {
             if let Some(k) = &key {
                 body["prompt_cache_key"] = serde_json::Value::String(k.clone());
             }
-            http.post(format!("{base}/v1/responses"))
+            let request_id = uuid::Uuid::new_v4().to_string();
+            let response = http.post(format!("{base}/v1/responses"))
                 .header("Authorization", "Bearer test-key")
+                .header("x-request-id", &request_id)
                 .json(&body)
                 .send()
                 .await
-                .unwrap()
+                .unwrap();
+            assert_eq!(response.headers()["x-request-id"], request_id);
+            response
         }
     };
 
@@ -224,6 +230,7 @@ async fn e2e_full_pool_story() {
     mock.lock().unwrap().failing.insert("tok-acc-1".into());
     let r4 = post(Some("sess-a"), true).await;
     assert_eq!(r4.status(), 200, "quota on bound account must fail over");
+    let failover_id = r4.headers()["x-request-id"].to_str().unwrap().to_owned();
     let body4 = r4.text().await.unwrap();
     assert!(
         body4.contains("hello from cop-acc-2"),
@@ -233,6 +240,8 @@ async fn e2e_full_pool_story() {
         mock.lock().unwrap().fourtwonined.contains(&"tok-acc-1".to_string()),
         "mock never saw the 429-causing request for acc-1"
     );
+    assert!(logs.lock().unwrap().iter().filter(|entry| entry.request_id == failover_id).count() >= 2,
+        "failed and successful attempts must share the correlation ID in request history");
 
     // phase 4: both accounts exhausted -> fail fast with earliest reset
     mock.lock().unwrap().failing.insert("cop-acc-2".into());

@@ -57,8 +57,6 @@ fn serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>
 /// reused on every subsequent start; an explicitly configured key/token MUST take precedence over
 /// minted ones. Key and token values MUST NOT be written to diagnostics.
 async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
-
     let cfg = config::Config::load();
     let store = Arc::new(store::Store::open(&cfg.db_path())?);
     store.prune_bindings(
@@ -195,13 +193,7 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         ))
         .route("/", axum::routing::get(ui::index))
         .nest("/v1", v1)
-        .layer(SetRequestIdLayer::new(
-            http::header::HeaderName::from_static("x-request-id"),
-            MakeRequestUuid,
-        ))
-        .layer(PropagateRequestIdLayer::new(
-            http::header::HeaderName::from_static("x-request-id"),
-        ))
+        .layer(axum::middleware::from_fn(underclass::correlation::middleware))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

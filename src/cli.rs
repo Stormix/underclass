@@ -106,11 +106,8 @@ fn remove_trailing_commas(text: &str) -> String {
             }
             ',' => {
                 let mut j = i + 1;
-                loop {
-                    while j < chars.len() && chars[j].is_whitespace() {
-                        j += 1;
-                    }
-                    break;
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
                 }
                 let next_meaningful = chars.get(j);
                 if next_meaningful.is_some_and(|&n| n == '}' || n == ']') {
