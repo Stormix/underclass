@@ -228,11 +228,26 @@ impl Store {
         .expect("upsert binding");
     }
 
-    #[allow(dead_code)]
-    pub fn delete_binding(&self, cache_key: &str) {
-        let conn = self.conn.lock().unwrap();
-        conn.execute("DELETE FROM bindings WHERE cache_key = ?1", params![cache_key])
-            .expect("delete binding");
+    /// @cc [owner:ghuntley,label:storage] binding-storage-bounded
+    /// `prune_bindings` MUST delete bindings older than `ttl_ms` and then retain at most `cap`
+    /// newest rows. It MUST perform both deletions in one transaction.
+    pub fn prune_bindings(&self, now_ms: i64, ttl_ms: i64, cap: usize) {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().expect("binding prune tx");
+        tx.execute(
+            "DELETE FROM bindings WHERE bound_at < ?1",
+            params![now_ms.saturating_sub(ttl_ms)],
+        )
+        .expect("delete expired bindings");
+        tx.execute(
+            "DELETE FROM bindings WHERE cache_key IN (
+               SELECT cache_key FROM bindings ORDER BY bound_at DESC, cache_key DESC
+               LIMIT -1 OFFSET ?1
+             )",
+            params![i64::try_from(cap).unwrap_or(i64::MAX)],
+        )
+        .expect("cap bindings");
+        tx.commit().expect("commit binding prune");
     }
 
     pub fn catalog(&self, backend: BackendId) -> Vec<ModelInfo> {
@@ -296,6 +311,34 @@ fn parse_status(s: &str) -> AccountStatus {
         "auth_error" => AccountStatus::AuthError,
         "disabled" => AccountStatus::Disabled,
         _ => AccountStatus::Healthy,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn binding(key: &str, bound_at: i64) -> Binding {
+        Binding {
+            cache_key: key.into(),
+            account_id: "account".into(),
+            backend: BackendId::Codex,
+            bound_at,
+        }
+    }
+
+    #[test]
+    fn pruning_removes_expired_rows_and_caps_newest_rows() {
+        let store = Store::in_memory().unwrap();
+        for row in [binding("expired", 1), binding("old", 100), binding("new", 200)] {
+            store.upsert_binding(&row);
+        }
+
+        store.prune_bindings(250, 200, 1);
+
+        let rows = store.list_bindings();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].cache_key, "new");
     }
 }
 

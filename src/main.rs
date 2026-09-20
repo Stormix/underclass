@@ -61,6 +61,11 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
 
     let cfg = config::Config::load();
     let store = Arc::new(store::Store::open(&cfg.db_path())?);
+    store.prune_bindings(
+        models::now_ms(),
+        pool::BINDING_TTL_MS,
+        pool::DEFAULT_BINDING_CAP,
+    );
 
     let proxy_key = match cfg.proxy_key.clone() {
         Some(key) if !key.is_empty() => Some(key),
@@ -131,6 +136,11 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                store.prune_bindings(
+                    models::now_ms(),
+                    pool::BINDING_TTL_MS,
+                    pool::DEFAULT_BINDING_CAP,
+                );
                 state.pool.lock().unwrap().sync_from_store(&store);
             }
         });

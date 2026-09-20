@@ -233,6 +233,11 @@ pub async fn infer(State(state): State<Arc<AppState>>, req: Request) -> Response
             if let Some(key) = &sticky {
                 if let Some(binding) = state.pool.lock().unwrap().bindings().into_iter().find(|b| b.cache_key == *key) {
                     state.store.upsert_binding(&binding);
+                    state.store.prune_bindings(
+                        now_ms(),
+                        crate::pool::BINDING_TTL_MS,
+                        crate::pool::DEFAULT_BINDING_CAP,
+                    );
                 }
             }
         }
