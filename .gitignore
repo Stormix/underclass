@@ -16,3 +16,7 @@ devenv.local.yaml
 *.db
 *.bak
 .hegel/
+
+# nix build output
+result
+result-*
