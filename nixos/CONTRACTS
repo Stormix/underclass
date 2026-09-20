@@ -1,0 +1,5 @@
+@cc [owner:ghuntley,label:security] secrets-outside-store
+The NixOS module MUST accept service secrets through a runtime environment-file path and MUST NOT serialize those secrets into the Nix store.
+
+@cc [owner:ghuntley,label:testing] service-machine-test
+The NixOS machine test MUST boot the service, verify authenticated and unauthenticated HTTP behavior, verify durable state, and verify service restart behavior.

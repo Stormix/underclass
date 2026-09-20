@@ -67,5 +67,42 @@
           program = "${self.packages.${system}.underclass}/bin/underclass";
         };
       });
+
+      overlays.default = final: _prev: {
+        underclass = self.packages.${final.stdenv.hostPlatform.system}.underclass;
+      };
+
+      nixosModules.default = import ./nixos/module.nix self;
+
+      checks = forEachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+          isLinux = nixpkgs.lib.elem system [
+            "x86_64-linux"
+            "aarch64-linux"
+          ];
+        in
+        nixpkgs.lib.optionalAttrs isLinux {
+          underclass-module = pkgs.runCommand "underclass-nixos-module-eval" {
+            toplevel =
+              (pkgs.nixos [
+                self.nixosModules.default
+                {
+                  services.underclass.enable = true;
+                  system.stateVersion = "25.11";
+                  fileSystems."/".device = "none";
+                  fileSystems."/".fsType = "tmpfs";
+                  boot.loader.grub.enable = false;
+                }
+              ]).config.system.build.toplevel.drvPath;
+          } "test -n \"$toplevel\" && touch $out";
+
+          underclass-vm = import ./nixos/tests/underclass.nix {
+            inherit pkgs;
+            module = self.nixosModules.default;
+          };
+        }
+      );
     };
 }

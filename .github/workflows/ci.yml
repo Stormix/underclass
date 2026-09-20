@@ -35,3 +35,23 @@ jobs:
     - name: Run tests
       shell: devenv shell -- bash -e {0}
       run: cargo test --locked
+
+  nixos:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - uses: cachix/install-nix-action@v31
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - uses: cachix/cachix-action@v16
+      with:
+        name: devenv
+
+    - name: Evaluate the NixOS module
+      run: nix --accept-flake-config build .#checks.x86_64-linux.underclass-module
+
+    - name: Run the NixOS machine test
+      run: nix --accept-flake-config build .#checks.x86_64-linux.underclass-vm

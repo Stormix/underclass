@@ -137,6 +137,54 @@ cargo test
 
 Long-term devenv users can keep using `devenv shell` / `devenv test` directly — `nix develop` and `devenv shell` activate the same `devenv.nix`.
 
+### NixOS module
+
+Add underclass to your flake inputs and import its module:
+
+```nix
+{
+  inputs.underclass.url = "github:ghuntley/underclass";
+
+  outputs =
+    { nixpkgs, underclass, ... }:
+    {
+      nixosConfigurations.my-host = nixpkgs.lib.nixosSystem {
+        system = "x86_64-linux";
+        modules = [
+          underclass.nixosModules.default
+          {
+            services.underclass = {
+              enable = true;
+              bindAddress = "127.0.0.1:8080";
+              environmentFile = "/run/secrets/underclass.env";
+              settings = {
+                codex_cooldown_secs = 1800;
+                copilot_cooldown_secs = 1800;
+              };
+            };
+          }
+        ];
+      };
+    };
+}
+```
+
+The runtime environment file can provide credentials without placing them in the Nix store:
+
+```sh
+UNDERCLASS_PROXY_KEY=sk-underclass-...
+UNDERCLASS_UI_TOKEN=...
+```
+
+The service uses a dynamic user, persists its database in `/var/lib/underclass`, binds to localhost by default, and leaves the firewall closed. Set `services.underclass.openFirewall = true` only when intentionally binding beyond localhost.
+
+The flake also exports `overlays.default`. Validate the module and its QEMU machine test with:
+
+```sh
+nix build .#checks.x86_64-linux.underclass-module
+nix build .#checks.x86_64-linux.underclass-vm
+```
+
 Notes:
 
 - The package builds from the committed `Cargo.lock`; dependency versions are pinned there.
