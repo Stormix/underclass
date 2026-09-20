@@ -1,0 +1,28 @@
+use crate::models::{Account, BackendId, Outcome};
+use http::HeaderMap;
+use serde_json::Value;
+
+pub trait Backend: Send + Sync {
+    fn id(&self) -> BackendId;
+
+    fn default_cooldown_ms(&self) -> i64;
+
+    fn rewrite_url(&self, path: &str, account: &Account) -> String;
+
+    fn inject_headers(
+        &self,
+        account: &Account,
+        token: &str,
+        sticky: Option<&str>,
+        body: &Value,
+        headers: &mut HeaderMap,
+    );
+
+    fn prepare_body(&self, _body: &mut Value) {}
+
+    fn classify(&self, status: u16, body: &str, headers: &HeaderMap, now_ms: i64) -> Outcome {
+        crate::health::classify(self.id(), status, body, headers, self.default_cooldown_ms(), now_ms)
+    }
+}
+
+pub type BackendMap = std::collections::HashMap<BackendId, std::sync::Arc<dyn Backend>>;

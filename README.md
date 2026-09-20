@@ -1,0 +1,154 @@
+# underclass
+
+**A local proxy that pools multiple ChatGPT/Codex and GitHub Copilot subscriptions behind one OpenAI-compatible endpoint.**
+
+```
+                       ┌────────────────────────────────────┐
+                       │            underclass              │
+                       │                                    │
+ opencode ────────────►│  /v1/responses                     │
+ (any OpenAI-compatible│  /v1/chat/completions              │────► chatgpt.com
+  client)              │  /v1/models                        │      (N Codex subs,
+                       │                                    │       OAuth device flow)
+ web UI ◄─────────────►│  sticky sessions · health pool     │
+ (accounts, catalog,   │  fail-fast saturation · tracing    │────► api.githubcopilot.com
+  live request feed)   │                                    │      (M Copilot subs,
+                       └────────────────────────────────────┘       GitHub device flow)
+```
+
+One subscription runs out of quota? It leaves rotation until its window resets — and comes back on its own. Sessions stay pinned to one subscription so upstream prompt caches stay warm. When *everything* is exhausted, the proxy fails fast with the earliest reset time instead of hanging.
+
+---
+
+## Why
+
+Subscription-based model access has a per-account quota. One account is a ceiling; twenty accounts are a pool. underclass turns a pile of personal subscriptions into a single durable endpoint that behaves like one well-provisioned provider:
+
+- **No client changes** — the surface is plain `/v1/*`; point opencode (or anything OpenAI-compatible) at it.
+- **No quota whiplash** — exhausted accounts cool down and recover automatically; clients never see account churn.
+- **No cache waste** — sessions are sticky, so the upstream prompt cache keeps working across turns.
+
+## Quick start
+
+```sh
+cargo run -- serve
+```
+
+```
+minted proxy api key: sk-underclass-…
+underclass listening on http://127.0.0.1:8080
+web ui: http://127.0.0.1:8080/  (admin token: …)
+```
+
+1. Open the web UI and paste the admin token.
+2. Click **Add account** → pick *ChatGPT / Codex* or *GitHub Copilot* → enter the device code at the shown URL. The account is labeled automatically with the account's email or username.
+3. Repeat for every subscription you want in the pool.
+4. Point opencode at the pool:
+
+```sh
+cargo run -- connect
+opencode --provider underclass --model underclass/gpt-5.5
+```
+
+`underclass connect` writes the provider block and credentials into your global opencode config (`~/.config/opencode/opencode.json{,c}` + `auth.json`), idempotently and with backups. Re-run it any time; `--remove` undoes it.
+
+## How routing works
+
+- **Sticky sessions.** Requests carrying `prompt_cache_key` / `promptCacheKey` (opencode sends the session ID when configured with `setCacheKey: true`) always land on the same subscription. Bindings live for 24h, survive restarts, and rebind preferentially within the same backend when an account cools.
+- **Health pool.** A quota response (`429`/usage-limit bodies) moves an account to *cooling* until `retry-after` (or a per-backend default). 401s trigger one token refresh + retry, then the account needs re-login. Cooling accounts stay configured and return to rotation automatically.
+- **Fail fast.** If every account eligible for the requested model is cooling, the proxy answers `429` + `Retry-After` = earliest reset. No queuing.
+- **Flat pool.** Codex and Copilot accounts compete by least-in-flight, filtered by per-backend model catalogs. Unknown model IDs pass through to Codex so new models work without proxy changes.
+- **Pre-first-byte failover only.** Once a stream starts, upstream errors pass through — no silent re-send of half-finished turns.
+
+Design decisions and their trade-offs live in [`docs/adr/`](docs/adr) — start with [ADR 0010](docs/adr/0010-unprefixed-routing-flat-pool.md) for the routing model.
+
+## Configuration
+
+Optional `~/.config/underclass/config.toml`:
+
+| key | default | meaning |
+|---|---|---|
+| `bind` | `127.0.0.1:8080` | listen address |
+| `proxy_key` | minted on first run | bearer key clients must send to `/v1/*` |
+| `ui_token` | minted on first run | admin token for the web UI + `/admin/api/*` |
+| `codex_cooldown_secs` | `1800` | cooling window when upstream omits `retry-after` |
+| `copilot_cooldown_secs` | `1800` | same, for Copilot |
+
+Environment overrides: `UNDERCLASS_BIND`, `UNDERCLASS_PROXY_KEY`, `UNDERCLASS_UI_TOKEN`. For testing against a mock upstream: `UNDERCLASS_CODEX_UPSTREAM`, `UNDERCLASS_COPILOT_UPSTREAM` (default to the real endpoints).
+
+State (credentials, sticky bindings, model catalog, minted keys) lives in `~/.local/share/underclass/pool.db`. Delete it to start fresh.
+
+## CLI
+
+```
+underclass serve [--bind ADDR]
+underclass connect [--base-url URL] [--api-key KEY] [--model MODEL]
+                   [--project] [--no-default-model] [--dry-run] [--remove]
+```
+
+`connect` targets the global opencode config by default; `--project` writes `./.opencode/opencode.json` instead. `--dry-run` prints the merged documents without writing.
+
+## Endpoints
+
+| route | auth | purpose |
+|---|---|---|
+| `POST /v1/responses` | proxy key | Responses API, streamed through to the pool |
+| `POST /v1/chat/completions` | proxy key | Chat Completions, same |
+| `GET /v1/models` | proxy key | union catalog with merged limits |
+| `GET /` | none | web UI |
+| `GET /admin/api/state` | admin token | accounts, catalog, last 200 requests |
+| `POST /admin/api/flows` | admin token | start a device-flow onboarding |
+| `GET /admin/api/flows/{id}` | admin token | poll an onboarding flow |
+| `POST /admin/api/accounts/{id}/enable|disable|relogin` | admin token | account controls |
+| `DELETE /admin/api/accounts/{id}` | admin token | remove from pool |
+| `GET|PUT /admin/api/catalog/{backend}` | admin token | inspect/edit model catalog |
+| `GET /admin/api/client-key` | admin token | retrieve the proxy key for `connect` |
+
+Every response carries `x-request-id`; logs are JSON (`RUST_LOG` filters, `--log-format json|pretty`) and each request logs the account (label) that served it.
+
+## Models
+
+The catalog is data, not code: seeded with the Codex families (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`) and Copilot's live `/models` list. Edit it in the UI or via the admin API; routing eligibility and the opencode model block follow it. See [ADR 0007](docs/adr/0007-config-driven-model-catalog.md).
+
+## Security
+
+- Access/refresh tokens, authorization headers, and prompt bodies are **never** logged.
+- Account labels (email/username) appear in logs and the UI by design; raw UUID account IDs are truncated.
+- `auth.json` written by `connect` uses `0600`. Never commit `pool.db` or `*.bak`.
+- The proxy binds to localhost by default; put it behind a tunnel only if you understand the exposure.
+- OAuth tokens rotate: every Codex refresh persists the new refresh token immediately.
+
+## Development
+
+```sh
+cargo build
+cargo test        # 43 unit tests + 8 Hegel property tests + e2e suite
+```
+
+Testing is two-tier: plain unit tests for exact behavior (headers, merges, redaction), and [Hegel](https://hegel.dev) property tests over the pure pool core — stickiness stability, health-state invariants, saturation minimums, TTL/cap bounds. The core (`src/pool.rs`, `src/health.rs`) is synchronous with an injected clock; async lives only at the edges. New backends implement the `provider::Backend` trait and register — nothing else changes.
+
+Agent conventions and the ADR policy are in [`AGENTS.md`](AGENTS.md). Architecture decision records: [`docs/adr/`](docs/adr).
+
+## Project layout
+
+```
+src/
+  main.rs      bootstrap, router, background tasks
+  config.rs    TOML + env config
+  models.rs    domain types (Account, status, catalog, log entries)
+  store.rs     SQLite persistence (accounts, bindings, catalog, config)
+  pool.rs      pure pool core: stickiness, eligibility, selection
+  health.rs    quota classification, retry-after parsing
+  provider.rs  Backend trait
+  codex.rs     ChatGPT/Codex backend (device flow, refresh, headers)
+  copilot.rs   GitHub Copilot backend (device flow, catalog, headers)
+  tokens.rs    single-flight token refresh
+  proxy.rs     /v1/* handlers, failover, streaming
+  logging.rs   structured logs, correlation IDs, redaction
+  ui.rs        admin API
+  ui.html      embedded single-page web UI
+  cli.rs       `connect` verb, JSONC-safe opencode config merge
+tests/
+  properties.rs  Hegel property tests over the pure core
+  e2e.rs         full-pool story against a mock upstream
+```

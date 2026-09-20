@@ -1,0 +1,293 @@
+use hegel::generators as gs;
+use hegel::TestCase;
+use underclass::models::{Account, AccountStatus, BackendId, Outcome};
+use underclass::pool::{Decision, PoolCore, SelectError};
+use underclass::store::Store;
+
+fn account(id: &str, backend: BackendId) -> Account {
+    Account {
+        id: id.into(),
+        backend,
+        label: id.into(),
+        refresh_token: None,
+        access_token: None,
+        expires_at: 0,
+        account_id: None,
+        residency: None,
+        enterprise_url: None,
+        status: AccountStatus::Healthy,
+        reset_at: 0,
+        created_at: 0,
+        updated_at: 0,
+    }
+}
+
+struct Built {
+    core: PoolCore,
+    accounts: Vec<String>,
+}
+
+fn build(backend_spread: usize, account_count: usize) -> Built {
+    let store = Store::in_memory().unwrap();
+    let mut core = PoolCore::new(&store);
+    let models: Vec<String> = vec!["gpt-5.5".into(), "gpt-4.1".into()];
+    core.set_catalog(BackendId::Codex, models.clone());
+    if backend_spread > 1 {
+        core.set_catalog(BackendId::Copilot, models.clone());
+    }
+    let mut accounts = Vec::new();
+    for i in 0..account_count.max(1) {
+        let backend = if backend_spread > 1 && i % backend_spread != 0 {
+            BackendId::Copilot
+        } else {
+            BackendId::Codex
+        };
+        let id = format!("acc-{i}");
+        core.insert_account(account(&id, backend));
+        accounts.push(id);
+    }
+    Built { core, accounts }
+}
+
+#[hegel::test]
+fn test_stickiness_is_stable_while_healthy(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(6));
+    let mut built = build(2, account_count);
+    let requests: Vec<String> = tc.draw(gs::vecs(gs::text()).max_size(20));
+    let mut bindings: std::collections::HashMap<String, String> = Default::default();
+    let mut now = 0i64;
+    for key in requests {
+        if key.is_empty() {
+            continue;
+        }
+        now += 1;
+        if let Ok(sel) = built.core.select(now, Some(&key), "gpt-5.5") {
+            match bindings.get(&key) {
+                Some(previous) => {
+                    assert_eq!(
+                        *previous, sel.account_id,
+                        "sticky binding changed without health change"
+                    );
+                }
+                None => {
+                    bindings.insert(key, sel.account_id.clone());
+                }
+            }
+        }
+    }
+}
+
+#[hegel::test]
+fn test_rebinding_stays_stable_after_rebind(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(2).max_value(6));
+    let mut built = build(2, account_count);
+    let key = "session-key";
+    let steps: Vec<u8> = tc.draw(gs::vecs(gs::integers::<u8>().min_value(0).max_value(2)).max_size(30));
+    let mut current: Option<String> = None;
+    let mut rebound: Option<String> = None;
+    let mut now = 0i64;
+    for step in steps {
+        now += 1;
+        match step {
+            0 => {
+                if let Ok(sel) = built.core.select(now, Some(key), "gpt-5.5") {
+                    current = Some(sel.account_id);
+                }
+            }
+            1 => {
+                if let Some(id) = &current {
+                    built.core.report(
+                        id,
+                        Outcome::QuotaExhausted {
+                            until_ms: now + 100_000,
+                        },
+                    );
+                    rebound = None;
+                }
+            }
+            _ => {
+                if let Ok(sel) = built.core.select(now, Some(key), "gpt-5.5") {
+                    if let Some(old) = &current {
+                        if old != &sel.account_id {
+                            let previous_healthy = built.core.accounts[old].account.healthy();
+                            assert!(
+                                !previous_healthy,
+                                "binding changed while previous account was still healthy"
+                            );
+                            match &rebound {
+                                Some(first_rebind) => {
+                                    assert_eq!(
+                                        *first_rebind, sel.account_id,
+                                        "unstable rebinding"
+                                    );
+                                }
+                                None => rebound = Some(sel.account_id.clone()),
+                            }
+                        }
+                    }
+                    current = Some(sel.account_id);
+                }
+            }
+        }
+    }
+}
+
+#[hegel::test]
+fn test_selection_never_returns_unhealthy(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(8));
+    let mut built = build(2, account_count);
+    let events: Vec<(usize, u8)> = tc.draw(gs::vecs(gs::tuples!(
+        gs::integers::<usize>().min_value(0).max_value(7),
+        gs::integers::<u8>().min_value(0).max_value(3)
+    )));
+    let mut now = 0i64;
+    for (index, kind) in events {
+        now += 1;
+        let Some(id) = built.accounts.get(index % built.accounts.len()).cloned() else {
+            continue;
+        };
+        match kind {
+            0 => {
+                built
+                    .core
+                    .report(&id, Outcome::QuotaExhausted { until_ms: now + 500 });
+            }
+            1 => {
+                built.core.report(&id, Outcome::AuthFailed);
+            }
+            2 => {
+                built.core.set_status(&id, AccountStatus::Disabled, 0);
+            }
+            _ => {
+                built.core.report(&id, Outcome::QuotaExhausted { until_ms: now + 100 });
+                built.core.sweep(now + 101);
+            }
+        }
+        if let Ok(sel) = built.core.select(now, Some("k"), "gpt-5.5") {
+            let state = &built.core.accounts[&sel.account_id];
+            assert!(
+                state.account.healthy(),
+                "selected unhealthy account {:?}",
+                state.account.status
+            );
+        }
+    }
+}
+
+#[hegel::test]
+fn test_saturation_reports_minimum_reset(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(2).max_value(8));
+    let mut built = build(1, account_count);
+    let resets: Vec<i64> = tc.draw(gs::vecs(gs::integers::<i64>().min_value(1).max_value(10_000)));
+    let mut latest_by_account: std::collections::HashMap<String, i64> = Default::default();
+    for (i, reset) in resets.into_iter().enumerate() {
+        let Some(id) = built.accounts.get(i % built.accounts.len()).cloned() else {
+            continue;
+        };
+        built.core.report(&id, Outcome::QuotaExhausted { until_ms: reset });
+        latest_by_account.insert(id, reset);
+    }
+    if latest_by_account.is_empty() {
+        return;
+    }
+    let expected = latest_by_account.values().copied().min().unwrap();
+    for id in &built.accounts {
+        if built.core.accounts[id].account.healthy() {
+            built
+                .core
+                .report(id, Outcome::QuotaExhausted { until_ms: expected });
+        }
+    }
+    match built.core.select(0, Some("k"), "gpt-5.5") {
+        Err(SelectError::Saturated { until_ms }) => assert_eq!(until_ms, expected),
+        other => panic!("expected saturated, got {other:?}"),
+    }
+}
+
+#[hegel::test]
+fn test_inflight_stays_nonnegative(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(5));
+    let mut built = build(2, account_count);
+    let ops: Vec<(usize, u8)> = tc.draw(gs::vecs(gs::tuples!(
+        gs::integers::<usize>().min_value(0).max_value(4),
+        gs::integers::<u8>().min_value(0).max_value(1)
+    )));
+    for (index, op) in ops {
+        let Some(id) = built.accounts.get(index % built.accounts.len()).cloned() else {
+            continue;
+        };
+        if op == 0 {
+            built.core.acquire(&id);
+        } else {
+            built.core.release(&id);
+        }
+        assert!(built.core.accounts[&id].inflight < u32::MAX);
+    }
+}
+
+#[hegel::test]
+fn test_cooling_expiry_restores_health(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(6));
+    let mut built = build(1, account_count);
+    let events: Vec<(usize, i64)> = tc.draw(gs::vecs(gs::tuples!(
+        gs::integers::<usize>().min_value(0).max_value(5),
+        gs::integers::<i64>().min_value(1).max_value(1000)
+    )));
+    let mut now = 0i64;
+    for (index, cooldown) in events {
+        now += cooldown;
+        let Some(id) = built.accounts.get(index % built.accounts.len()).cloned() else {
+            continue;
+        };
+        built.core.report(&id, Outcome::QuotaExhausted { until_ms: now });
+        built.core.sweep(now);
+        let state = &built.core.accounts[&id];
+        assert!(
+            state.account.healthy(),
+            "account still cooling after reset passed"
+        );
+    }
+}
+
+#[hegel::test]
+fn test_unknown_models_still_routable_via_codex(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(6));
+    let mut built = build(2, account_count);
+    let unknown: Vec<String> = tc.draw(gs::vecs(gs::text()).max_size(15));
+    let mut now = 0i64;
+    for model in unknown {
+        if model.is_empty() {
+            continue;
+        }
+        now += 1;
+        if let Ok(sel) = built.core.select(now, None, &model) {
+            assert_eq!(
+                sel.backend,
+                BackendId::Codex,
+                "unknown model '{model}' routed to non-codex backend"
+            );
+        }
+    }
+}
+
+#[hegel::test]
+fn test_bindings_respect_ttl_and_cap(tc: TestCase) {
+    let account_count: usize = tc.draw(gs::integers::<usize>().min_value(1).max_value(4));
+    let mut built = build(1, account_count);
+    let mut now = 0i64;
+    let keys: Vec<String> = tc.draw(gs::vecs(gs::text()).max_size(30));
+    for key in keys {
+        if key.is_empty() {
+            continue;
+        }
+        now += 3_600_000;
+        let _ = built.core.select(now, Some(&key), "gpt-5.5");
+        assert!(
+            built.core.bindings().len() <= underclass::pool::DEFAULT_BINDING_CAP,
+            "binding cache exceeded cap"
+        );
+    }
+    let later = now + underclass::pool::BINDING_TTL_MS + 1;
+    built.core.sweep(later);
+    assert!(built.core.bindings().is_empty(), "expired bindings not evicted");
+}

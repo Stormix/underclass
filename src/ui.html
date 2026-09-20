@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>underclass — codex/copilot pool</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0d1117; color: #e6edf3; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+  h1 { font-size: 1.3rem; } h1 small { color: #8b949e; font-weight: normal; }
+  h2 { font-size: 1rem; margin: 28px 0 8px; color: #c9d1d9; }
+  button { background: #21262d; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 0.85rem; }
+  button:hover { background: #30363d; }
+  button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  button.danger:hover { background: #b62324; border-color: #b62324; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #21262d; }
+  th { color: #8b949e; font-weight: 500; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
+  .healthy { background: #12331f; color: #3fb950; }
+  .cooling { background: #3d2e00; color: #d29922; }
+  .auth_error { background: #441418; color: #f85149; }
+  .disabled { background: #21262d; color: #8b949e; }
+  dialog { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 10px; padding: 20px; min-width: 380px; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  input, select, textarea { background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 8px; width: 100%; font-size: 0.9rem; }
+  label { display: block; margin: 12px 0 4px; font-size: 0.8rem; color: #8b949e; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .code { font-family: ui-monospace, monospace; font-size: 1.4rem; letter-spacing: 2px; background: #0d1117; padding: 10px; border-radius: 6px; text-align: center; margin: 10px 0; }
+  pre { background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 12px; overflow: auto; font-size: 0.78rem; }
+  .muted { color: #8b949e; font-size: 0.8rem; }
+  .spin { display: inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  section.card { background: #161b22; border: 1px solid #21262d; border-radius: 10px; padding: 16px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>underclass <small>pooled codex + copilot subscriptions</small></h1>
+
+  <section class="card">
+    <div class="row" style="justify-content: space-between">
+      <h2 style="margin:0">Accounts</h2>
+      <div class="row">
+        <button onclick="startFlow()">Add account</button>
+        <button onclick="refreshCopilotCatalog()">Refresh Copilot catalog</button>
+      </div>
+    </div>
+    <table id="accounts">
+      <thead><tr><th>label</th><th>backend</th><th>status</th><th>in-flight</th><th>sticky sessions</th><th>resets in</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="muted">Healthy accounts serve requests. Quota exhaustion moves an account to <b>cooling</b> until its window resets — it stays configured. <b>auth error</b> accounts need re-login.</p>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0">Recent requests</h2>
+    <table id="requests">
+      <thead><tr><th>time</th><th>request id</th><th>model</th><th>backend</th><th>account</th><th>sticky</th><th>status</th><th>ms</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0">Use with opencode</h2>
+    <p class="muted">Run <code>underclass connect</code>, or paste this into <code>~/.config/opencode/opencode.json</code>:</p>
+    <pre id="snippet"></pre>
+    <button onclick="copySnippet()">Copy</button>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0">Model catalog</h2>
+    <label>backend</label>
+    <select id="catalogBackend" onchange="loadCatalog()">
+      <option value="codex">codex</option>
+      <option value="copilot">copilot</option>
+    </select>
+    <label>models (JSON array of {id, name, context, input, output})</label>
+    <textarea id="catalogEditor" rows="10"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" onclick="saveCatalog()">Save catalog</button>
+      <span id="catalogMsg" class="muted"></span>
+    </div>
+  </section>
+</main>
+
+<dialog id="flowDialog">
+  <h2 id="flowTitle">Add account</h2>
+  <div id="flowIdle">
+    <label>backend</label>
+    <select id="flowBackend">
+      <option value="codex">ChatGPT / Codex</option>
+      <option value="copilot">GitHub Copilot</option>
+    </select>
+    <div id="enterpriseWrap" style="display:none">
+      <label>GitHub Enterprise URL or domain (blank for github.com)</label>
+      <input id="flowEnterprise" placeholder="company.ghe.com">
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button class="primary" onclick="beginFlow()">Continue</button>
+      <button onclick="closeFlow()">Cancel</button>
+    </div>
+  </div>
+  <div id="flowPending" style="display:none">
+    <p>Enter this code at <a id="flowVerifyUrl" target="_blank" rel="noopener"></a></p>
+    <div class="code" id="flowUserCode"></div>
+    <p class="muted"><span class="spin">⠋</span> waiting for authorization…</p>
+    <button onclick="closeFlow()">Cancel</button>
+  </div>
+  <div id="flowDone" style="display:none">
+    <p>✅ Account authorized.</p>
+    <button class="primary" onclick="closeFlow()">Done</button>
+  </div>
+  <div id="flowFailed" style="display:none">
+    <p id="flowError" style="color:#f85149"></p>
+    <button onclick="closeFlow()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="tokenDialog">
+  <h2>Admin token</h2>
+  <p class="muted">Paste the UI token printed when underclass started (or set <code>UNDERCLASS_UI_TOKEN</code>).</p>
+  <input id="uiToken" type="password">
+  <div class="row" style="margin-top:14px">
+    <button class="primary" onclick="saveToken()">Save</button>
+  </div>
+</dialog>
+
+<script>
+let flowTimer = null;
+
+function token() { return localStorage.getItem('underclass_token') || ''; }
+function saveToken() {
+  localStorage.setItem('underclass_token', document.getElementById('uiToken').value.trim());
+  document.getElementById('tokenDialog').close();
+  loadState();
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token(), ...(opts.headers || {}) },
+  });
+  if (res.status === 401) { document.getElementById('tokenDialog').showModal(); throw new Error('unauthorized'); }
+  return res;
+}
+
+function fmtReset(ms, row) {
+  if (row.status !== 'cooling' || ms <= 0) return '—';
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  if (h > 0) return h + 'h ' + (m % 60) + 'm';
+  if (m > 0) return m + 'm ' + (s % 60) + 's';
+  return s + 's';
+}
+
+async function loadState() {
+  try {
+    const res = await api('/admin/api/state');
+    const data = await res.json();
+    const tbody = document.querySelector('#accounts tbody');
+    tbody.innerHTML = '';
+    for (const a of data.accounts) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${esc(a.label)}</td><td>${a.backend}</td>
+        <td><span class="badge ${a.status}">${a.status}</span></td>
+        <td>${a.inflight}</td><td>${a.sticky_sessions}</td>
+        <td>${fmtReset(a.cooling_remaining_ms, a)}</td>
+        <td class="row">
+          ${a.status === 'disabled' ? `<button onclick="acct('${a.id}','enable')">Enable</button>` : `<button onclick="acct('${a.id}','disable')">Disable</button>`}
+          ${a.status === 'auth_error' ? `<button class="primary" onclick="relogin('${a.id}')">Re-login</button>` : ''}
+          <button class="danger" onclick="del('${a.id}')">Remove</button>
+        </td>`;
+      tbody.appendChild(tr);
+    }
+    const rbody = document.querySelector('#requests tbody');
+    rbody.innerHTML = '';
+    for (const r of data.requests.slice(0, 50)) {
+      const tr = document.createElement('tr');
+      const t = new Date(r.ts).toLocaleTimeString();
+      tr.innerHTML = `<td>${t}</td><td class="muted">${esc(r.request_id.slice(0,8))}</td><td>${esc(r.model)}</td>
+        <td>${r.backend ?? '—'}</td><td>${r.label ? esc(r.label) : (r.account ? esc(r.account.slice(0,8)) : '—')}</td>
+        <td>${esc(r.sticky)}</td><td>${r.status}</td><td>${r.duration_ms}</td>`;
+      rbody.appendChild(tr);
+    }
+    document.getElementById('snippet').textContent = JSON.stringify(snippet(data.catalog), null, 2);
+  } catch (e) { /* token dialog already handling 401 */ }
+}
+
+function snippet(catalog) {
+  const models = {};
+  for (const backend of Object.keys(catalog || {})) {
+    for (const m of catalog[backend]) models[m.id] = { name: m.name };
+  }
+  return {
+    provider: { underclass: {
+      npm: '@ai-sdk/openai-compatible',
+      name: 'Underclass (pooled Codex + Copilot)',
+      options: { baseURL: location.origin + '/v1', apiKey: '<proxy-key>', setCacheKey: true },
+      models
+    }},
+    model: 'underclass/gpt-5.5'
+  };
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = String(s); return d.innerHTML; }
+
+let catalogCache = [];
+async function loadCatalog() {
+  const backend = document.getElementById('catalogBackend').value;
+  const res = await api('/admin/api/catalog/' + backend);
+  const data = await res.json();
+  document.getElementById('catalogEditor').value = JSON.stringify(data.models, null, 2);
+}
+async function saveCatalog() {
+  const backend = document.getElementById('catalogBackend').value;
+  let models;
+  try { models = JSON.parse(document.getElementById('catalogEditor').value); }
+  catch (e) { document.getElementById('catalogMsg').textContent = 'invalid JSON: ' + e.message; return; }
+  const res = await api('/admin/api/catalog/' + backend, { method: 'PUT', body: JSON.stringify({ models }) });
+  if (res.ok) { document.getElementById('catalogMsg').textContent = 'saved'; loadState(); }
+}
+
+document.getElementById('flowBackend').addEventListener('change', () => {
+  document.getElementById('enterpriseWrap').style.display =
+    document.getElementById('flowBackend').value === 'copilot' ? 'block' : 'none';
+});
+
+async function startFlow() {
+  document.getElementById('flowIdle').style.display = 'block';
+  document.getElementById('flowPending').style.display = 'none';
+  document.getElementById('flowDone').style.display = 'none';
+  document.getElementById('flowFailed').style.display = 'none';
+  document.getElementById('flowDialog').showModal();
+}
+
+async function beginFlow() {
+  const backend = document.getElementById('flowBackend').value;
+  const body = { backend };
+  if (backend === 'copilot') {
+    const ent = document.getElementById('flowEnterprise').value.trim();
+    if (ent) body.enterprise_url = ent;
+  }
+  const res = await api('/admin/api/flows', { method: 'POST', body: JSON.stringify(body) });
+  if (!res.ok) { alert(await res.text()); return; }
+  const data = await res.json();
+  pollFlow(data.flow_id);
+}
+
+function pollFlow(flowId) {
+  document.getElementById('flowIdle').style.display = 'none';
+  document.getElementById('flowPending').style.display = 'block';
+  clearInterval(flowTimer);
+  flowTimer = setInterval(async () => {
+    const res = await api('/admin/api/flows/' + flowId);
+    const data = await res.json();
+    const state = data.flow.state;
+    if (state.state === 'pending') {
+      document.getElementById('flowUserCode').textContent = state.user_code;
+      const link = document.getElementById('flowVerifyUrl');
+      link.href = state.verify_url; link.textContent = state.verify_url;
+    } else if (state.state === 'authorized') {
+      clearInterval(flowTimer);
+      document.getElementById('flowPending').style.display = 'none';
+      document.getElementById('flowDone').style.display = 'block';
+      loadState();
+    } else if (state.state === 'failed') {
+      clearInterval(flowTimer);
+      document.getElementById('flowPending').style.display = 'none';
+      document.getElementById('flowFailed').style.display = 'block';
+      document.getElementById('flowError').textContent = state.message;
+    }
+  }, 2000);
+}
+
+function closeFlow() { clearInterval(flowTimer); document.getElementById('flowDialog').close(); loadState(); }
+
+async function acct(id, action) {
+  await api('/admin/api/accounts/' + id + '/' + action, { method: 'POST' });
+  loadState();
+}
+async function relogin(id) {
+  const res = await api('/admin/api/accounts/' + id + '/relogin', { method: 'POST' });
+  if (res.ok) {
+    const data = await res.json();
+    document.getElementById('flowDialog').showModal();
+    document.getElementById('flowIdle').style.display = 'none';
+    document.getElementById('flowPending').style.display = 'block';
+    pollFlow(data.flow_id);
+  }
+}
+async function del(id) {
+  if (!confirm('Remove this account from the pool?')) return;
+  await api('/admin/api/accounts/' + id, { method: 'DELETE' });
+  loadState();
+}
+async function refreshCopilotCatalog() {
+  await api('/admin/api/catalog/refresh-copilot', { method: 'POST' });
+  loadState();
+}
+function copySnippet() {
+  navigator.clipboard.writeText(document.getElementById('snippet').textContent);
+}
+
+if (!token()) document.getElementById('tokenDialog').showModal();
+loadState();
+loadCatalog().then(() => loadState());
+setInterval(loadState, 5000);
+</script>
+</body>
+</html>
