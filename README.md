@@ -110,6 +110,38 @@ Every response carries `x-request-id`; logs are JSON (`RUST_LOG` filters, `--log
 
 The catalog is data, not code: seeded with the Codex families (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.5`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6-astra`) and Copilot's live `/models` list. Edit it in the UI or via the admin API; routing eligibility and the opencode model block follow it. See [ADR 0007](docs/adr/0007-config-driven-model-catalog.md).
 
+## Nix flake
+
+The repository is a Nix flake: it exposes the CLI as a package/app and the devenv development shell as `devShells.default`.
+
+Run the proxy without installing:
+
+```sh
+nix run github:ghuntley/underclass -- serve
+```
+
+Install it into your profile:
+
+```sh
+nix profile install github:ghuntley/underclass
+```
+
+Use the devenv shell (Rust toolchain, cargo) for development:
+
+```sh
+nix develop --no-pure-eval
+cargo test
+```
+
+`--no-pure-eval` is required for the devenv shell (devenv inspects the working directory; this matches devenv's own flake template). The package and app outputs are pure — `nix run` and `nix profile install` need no flags.
+
+Long-term devenv users can keep using `devenv shell` / `devenv test` directly — `nix develop` and `devenv shell` activate the same `devenv.nix`.
+
+Notes:
+
+- The package builds from the committed `Cargo.lock`; dependency versions are pinned there.
+- `nix build` skips `cargo test` because the property tests compile the Hegel engine as a build step, which needs network access that the Nix sandbox denies. CI runs the full suite via devenv (see `.github/workflows/ci.yml`).
+
 ## Security
 
 - Access/refresh tokens, authorization headers, and prompt bodies are **never** logged.
@@ -128,6 +160,10 @@ cargo test        # 43 unit tests + 8 Hegel property tests + e2e suite
 Testing is two-tier: plain unit tests for exact behavior (headers, merges, redaction), and [Hegel](https://hegel.dev) property tests over the pure pool core — stickiness stability, health-state invariants, saturation minimums, TTL/cap bounds. The core (`src/pool.rs`, `src/health.rs`) is synchronous with an injected clock; async lives only at the edges. New backends implement the `provider::Backend` trait and register — nothing else changes.
 
 Agent conventions and the ADR policy are in [`AGENTS.md`](AGENTS.md). Architecture decision records: [`docs/adr/`](docs/adr).
+
+## License
+
+[MIT](LICENSE)
 
 ## Project layout
 

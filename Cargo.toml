@@ -2,6 +2,9 @@
 name = "underclass"
 version = "0.1.0"
 edition = "2024"
+description = "Pooled multi-subscription ChatGPT/Codex and GitHub Copilot proxy with an OpenAI-compatible endpoint"
+license = "MIT"
+repository = "https://github.com/ghuntley/underclass"
 
 [dependencies]
 async-trait = "0.1.92"

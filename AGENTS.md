@@ -45,4 +45,4 @@ cargo run -- connect --remove
 
 ## Config files agents may edit
 
-`AGENTS.md`, `README.md`, `docs/adr/*`, `Cargo.toml`, everything under `src/` and `tests/`. Do not touch `devenv.nix`/`devenv.lock` unless the task explicitly requires it, and never commit `*.bak`, `pool.db`, or `.hegel/` artifacts.
+`AGENTS.md`, `README.md`, `docs/adr/*`, `Cargo.toml`, `flake.nix`, `.github/*`, everything under `src/` and `tests/`. Do not touch `devenv.nix`/`devenv.lock` unless the task explicitly requires it, and never commit `*.bak`, `pool.db`, or `.hegel/` artifacts.
