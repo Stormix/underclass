@@ -55,7 +55,7 @@ fn serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>
 /// @cc [owner:ghuntley,label:security] keys-minted-once
 /// The proxy API key and admin UI token MUST be minted on first run, persisted to the store, and
 /// reused on every subsequent start; an explicitly configured key/token MUST take precedence over
-/// minted ones.
+/// minted ones. Key and token values MUST NOT be written to diagnostics.
 async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
@@ -69,8 +69,6 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
             None => {
                 let key = format!("sk-underclass-{}", crate::models::new_id().replace('-', ""));
                 store.config_set("proxy_key", &key);
-                println!("minted proxy api key: {key}");
-                println!("clients authenticate with 'Authorization: Bearer {key}'");
                 Some(key)
             }
         },
@@ -198,7 +196,7 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     println!("underclass listening on http://{bind_addr}");
-    println!("web ui: http://{bind_addr}/  (admin token: {ui_token})");
+    println!("web ui: http://{bind_addr}/");
     axum::serve(listener, app).await?;
     Ok(())
 }

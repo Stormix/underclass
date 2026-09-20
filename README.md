@@ -31,16 +31,21 @@ Subscription-based model access has a per-account quota. One account is a ceilin
 ## Quick start
 
 ```sh
+UNDERCLASS_PROXY_KEY="$(openssl rand -hex 32)" \
+UNDERCLASS_UI_TOKEN="$(openssl rand -hex 32)" \
 cargo run -- serve
 ```
 
 ```
-minted proxy api key: sk-underclass-…
 underclass listening on http://127.0.0.1:8080
-web ui: http://127.0.0.1:8080/  (admin token: …)
+web ui: http://127.0.0.1:8080/
 ```
 
-1. Open the web UI and paste the admin token.
+Keep the generated values in a password manager or runtime secret file; underclass
+never writes them to diagnostics. Open the web UI and paste the value supplied as
+`UNDERCLASS_UI_TOKEN`.
+
+1. Open the web UI and paste the configured admin token.
 2. Click **Add account** → pick *ChatGPT / Codex* or *GitHub Copilot* → enter the device code at the shown URL. The account is labeled automatically with the account's email or username.
 3. Repeat for every subscription you want in the pool.
 4. Point opencode at the pool:

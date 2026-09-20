@@ -12,9 +12,9 @@ pkgs.testers.nixosTest {
       services.underclass = {
         enable = true;
         environmentFile = "/etc/underclass-test.env";
-        settings.proxy_key = "test-key";
       };
       environment.etc."underclass-test.env".text = ''
+        UNDERCLASS_PROXY_KEY=test-key
         UNDERCLASS_UI_TOKEN=test-ui-token
       '';
       environment.systemPackages = [ pkgs.curl ];
@@ -24,6 +24,10 @@ pkgs.testers.nixosTest {
     machine.start()
     machine.wait_for_unit("underclass.service")
     machine.wait_for_open_port(8080)
+
+    with subtest("service diagnostics do not expose credentials"):
+        machine.fail("journalctl -u underclass.service --no-pager | grep -F test-key")
+        machine.fail("journalctl -u underclass.service --no-pager | grep -F test-ui-token")
 
     with subtest("web ui is served"):
         machine.succeed("curl -sf http://127.0.0.1:8080/ | grep -qi underclass")
