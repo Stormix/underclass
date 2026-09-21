@@ -26,8 +26,12 @@ pub struct Config {
 
 pub const DEFAULT_COOLDOWN_MS: i64 = 30 * 60 * 1000;
 
+/// @cc [owner:Stormix,label:windows;paths] user-home-fallback
+/// User-scoped Underclass paths MUST use `HOME` when set, then `USERPROFILE` on Windows, before
+/// falling back to the filesystem root.
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }

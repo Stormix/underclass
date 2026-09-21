@@ -32,9 +32,10 @@ fn main() {
     let cli = Cli::parse();
     logging::init(cli.log_format);
     match cli.command {
-        Some(Command::Connect { args }) => {
+        Some(Command::Connect { mut args }) => {
             let cfg = config::Config::load();
             let store = store::Store::open(&cfg.db_path()).expect("open pool db");
+            prefer_configured_proxy_key(&mut args, cfg.proxy_key);
             if let Err(e) = cli::connect(&args, &store) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
@@ -42,6 +43,15 @@ fn main() {
         }
         Some(Command::Serve { bind }) => serve(bind).expect("server failed"),
         None => serve(None).expect("server failed"),
+    }
+}
+
+/// @cc [owner:Stormix,label:cli;config] connect-active-proxy-key
+/// When `connect` receives no explicit API key, it MUST use a non-empty configured proxy key
+/// before the legacy key stored in the database. An explicit API key MUST remain unchanged.
+fn prefer_configured_proxy_key(args: &mut cli::ConnectArgs, configured_key: Option<String>) {
+    if args.api_key.is_none() {
+        args.api_key = configured_key.filter(|key| !key.is_empty());
     }
 }
 
@@ -248,7 +258,8 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
 
 #[cfg(test)]
 mod tests {
-    use super::is_loopback_bind;
+    use super::{is_loopback_bind, prefer_configured_proxy_key};
+    use underclass::cli::ConnectArgs;
 
     #[test]
     fn recognizes_only_ip_loopback_binds() {
@@ -256,6 +267,29 @@ mod tests {
         assert!(is_loopback_bind("[::1]:8080"));
         assert!(!is_loopback_bind("0.0.0.0:80"));
         assert!(!is_loopback_bind("localhost:80"));
+    }
+
+    fn connect_args(api_key: Option<&str>) -> ConnectArgs {
+        ConnectArgs {
+            base_url: "http://127.0.0.1:8080".to_string(),
+            api_key: api_key.map(str::to_string),
+            model: "gpt-5.5".to_string(),
+            no_default_model: false,
+            project: false,
+            dry_run: false,
+            remove: false,
+        }
+    }
+
+    #[test]
+    fn connect_prefers_the_active_configured_proxy_key() {
+        let mut from_config = connect_args(None);
+        prefer_configured_proxy_key(&mut from_config, Some("configured".to_string()));
+        assert_eq!(from_config.api_key.as_deref(), Some("configured"));
+
+        let mut explicit = connect_args(Some("explicit"));
+        prefer_configured_proxy_key(&mut explicit, Some("configured".to_string()));
+        assert_eq!(explicit.api_key.as_deref(), Some("explicit"));
     }
 }
 

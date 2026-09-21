@@ -37,8 +37,12 @@ pub fn opencode_data_dir() -> PathBuf {
     }
 }
 
+/// @cc [owner:Stormix,label:windows;paths] user-home-fallback
+/// User-scoped OpenCode paths MUST use `HOME` when set, then `USERPROFILE` on Windows, before
+/// falling back to the filesystem root.
 fn home() -> PathBuf {
     std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }
