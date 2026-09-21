@@ -126,6 +126,10 @@ fn remove_trailing_commas(text: &str) -> String {
     out
 }
 
+/// @cc [owner:ghuntley,label:cli;proxy] opencode-responses-adapter
+/// The generated OpenCode provider MUST use `@ai-sdk/openai` so GPT/Codex requests use the
+/// Responses wire format; `@ai-sdk/openai-compatible` emits Chat Completions bodies that the
+/// Codex subscription endpoint rejects.
 pub fn provider_block(base_url: &str, api_key: &str, models: &[crate::models::ModelInfo]) -> Value {
     let models: serde_json::Map<String, Value> = models
         .iter()
@@ -136,7 +140,7 @@ pub fn provider_block(base_url: &str, api_key: &str, models: &[crate::models::Mo
         })
         .collect();
     serde_json::json!({
-        "npm": "@ai-sdk/openai-compatible",
+        "npm": "@ai-sdk/openai",
         "name": "Underclass (pooled Codex + Copilot)",
         "options": {
             "baseURL": base_url,
@@ -467,8 +471,9 @@ mod tests {
     }
 
     #[test]
-    fn provider_block_carries_set_cache_key() {
+    fn provider_block_uses_responses_adapter_and_carries_set_cache_key() {
         let block = provider_block("http://127.0.0.1:8080/v1", "key", &[]);
+        assert_eq!(block["npm"], "@ai-sdk/openai");
         assert_eq!(block["options"]["setCacheKey"], true);
         assert_eq!(block["options"]["baseURL"], "http://127.0.0.1:8080/v1");
     }

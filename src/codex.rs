@@ -248,8 +248,13 @@ impl Backend for CodexBackend {
     /// @cc [owner:ghuntley,label:proxy] codex-store-false
     /// Every outbound Codex request body MUST have `store` set to `false`; the upstream endpoint
     /// rejects requests otherwise.
+
+    /// @cc [owner:ghuntley,label:proxy] codex-strip-output-limit
+    /// Every outbound Codex request body MUST omit `max_output_tokens`; OpenCode's Responses
+    /// adapter emits the field, but the subscription Codex endpoint rejects it.
     fn prepare_body(&self, body: &mut Value) {
         if let Some(obj) = body.as_object_mut() {
+            obj.remove("max_output_tokens");
             obj.insert("store".to_string(), Value::Bool(false));
         }
     }
@@ -353,4 +358,22 @@ mod tests {
         assert_eq!(headers.get("x-openai-internal-codex-residency").unwrap(), "eu");
         assert_eq!(headers.get("originator").unwrap(), "opencode");
     }
+
+    #[test]
+    fn strips_output_limit_rejected_by_codex() {
+        let backend = CodexBackend { cooldown_ms: 1000 };
+        let mut body = serde_json::json!({
+            "model": "gpt-5.6-sol",
+            "max_output_tokens": 2048,
+            "stream": true
+        });
+
+        backend.prepare_body(&mut body);
+
+        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(body["model"], "gpt-5.6-sol");
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["store"], false);
+    }
+
 }
