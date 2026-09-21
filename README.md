@@ -75,7 +75,7 @@ Optional `~/.config/underclass/config.toml`:
 |---|---|---|
 | `bind` | `127.0.0.1:8080` | listen address |
 | `proxy_key` | minted on first run | bearer key clients must send to `/v1/*` |
-| `ui_token` | minted on first run | admin token for the web UI + `/admin/api/*` |
+| `ui_token` | minted on first run | admin token for the web UI + `/admin/api/*`; set to `""` to disable UI authentication on an IP-loopback listener |
 | `codex_cooldown_secs` | `1800` | cooling window when upstream omits `retry-after` |
 | `copilot_cooldown_secs` | `1800` | same, for Copilot |
 

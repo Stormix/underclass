@@ -52,12 +52,23 @@ fn serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>
     runtime.block_on(async_serve(bind_override))
 }
 
+fn is_loopback_bind(bind: &str) -> bool {
+    bind
+        .strip_prefix("127.0.0.1:")
+        .is_some_and(|port| !port.is_empty())
+        || bind
+            .strip_prefix("[::1]:")
+            .is_some_and(|port| !port.is_empty())
+}
+
 /// @cc [owner:ghuntley,label:security] keys-minted-once
-/// The proxy API key and admin UI token MUST be minted on first run, persisted to the store, and
-/// reused on every subsequent start; an explicitly configured key/token MUST take precedence over
-/// minted ones. Key and token values MUST NOT be written to diagnostics.
+/// The proxy API key and a non-empty admin UI token MUST be minted on first run, persisted to the
+/// store, and reused on every subsequent start; explicitly configured values MUST take precedence.
+/// An explicitly empty UI token MUST disable UI authentication only on a loopback bind. Key and
+/// token values MUST NOT be written to diagnostics.
 async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let cfg = config::Config::load();
+    let bind = bind_override.unwrap_or_else(|| cfg.bind.clone());
     let store = Arc::new(store::Store::open(&cfg.db_path())?);
     store.prune_bindings(
         models::now_ms(),
@@ -78,13 +89,17 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
     };
 
     let ui_token = match cfg.ui_token.clone() {
-        Some(token) if !token.is_empty() => token,
-        _ => match store.config_get("ui_token") {
-            Some(token) => token,
+        Some(token) if token.is_empty() && is_loopback_bind(&bind) => None,
+        Some(token) if token.is_empty() => {
+            return Err("ui_token can be disabled only on a loopback bind".into());
+        }
+        Some(token) => Some(token),
+        None => match store.config_get("ui_token") {
+            Some(token) => Some(token),
             None => {
                 let token = crate::models::new_id().replace('-', "");
                 store.config_set("ui_token", &token);
-                token
+                Some(token)
             }
         },
     };
@@ -164,7 +179,6 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
     refresh_copilot_catalogs_on_boot(&state).await;
     refresh_identities_on_boot(&state).await;
 
-    let bind_addr = bind_override.unwrap_or(cfg.bind);
     let v1 = axum::Router::new()
         .route("/models", axum::routing::get(proxy::models))
         .route("/responses", axum::routing::post(proxy::infer))
@@ -225,11 +239,24 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         .layer(axum::middleware::from_fn(underclass::correlation::middleware))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
-    println!("underclass listening on http://{bind_addr}");
-    println!("web ui: http://{bind_addr}/");
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    println!("underclass listening on http://{bind}");
+    println!("web ui: http://{bind}/");
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_loopback_bind;
+
+    #[test]
+    fn recognizes_only_ip_loopback_binds() {
+        assert!(is_loopback_bind("127.0.0.1:80"));
+        assert!(is_loopback_bind("[::1]:8080"));
+        assert!(!is_loopback_bind("0.0.0.0:80"));
+        assert!(!is_loopback_bind("localhost:80"));
+    }
 }
 
 fn seed_catalog(store: &store::Store, backend: models::BackendId, defaults: Vec<models::ModelInfo>) {

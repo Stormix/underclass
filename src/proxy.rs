@@ -28,7 +28,7 @@ pub struct AppState {
     pub logs: Arc<Mutex<VecDeque<RequestLogEntry>>>,
     pub flows: crate::flows::FlowRegistry,
     pub proxy_key: Option<String>,
-    pub ui_token: String,
+    pub ui_token: Option<String>,
     pub usage: Arc<crate::usage::UsageService>,
 }
 

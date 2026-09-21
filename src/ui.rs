@@ -18,21 +18,24 @@ pub async fn index() -> impl IntoResponse {
 }
 
 /// @cc [owner:ghuntley,label:security] admin-token-gate
-/// Every `/admin/api/*` route MUST be rejected with 401 unless the `Authorization` header carries
-/// exactly `Bearer <ui_token>`; the HTML page at `/` MUST stay reachable without a token so the
-/// token can be entered in the UI.
+/// When an admin UI token is configured, every `/admin/api/*` route MUST be rejected with 401
+/// unless the `Authorization` header carries exactly `Bearer <ui_token>`. An explicitly disabled
+/// token MUST allow the route. The HTML page at `/` MUST stay reachable in either mode.
 pub async fn require_ui_token(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    let Some(expected) = state.ui_token.as_deref() else {
+        return next.run(req).await;
+    };
     let provided = headers
         .get(http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or_default();
-    if provided != state.ui_token {
+    if provided != expected {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     next.run(req).await

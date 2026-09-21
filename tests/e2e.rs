@@ -154,7 +154,11 @@ fn model(id: &str) -> ModelInfo {
     }
 }
 
-async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<VecDeque<RequestLogEntry>>>) {
+async fn spawn_app_with_ui_token(
+    store: Arc<Store>,
+    cooldown_ms: i64,
+    ui_token: Option<String>,
+) -> (String, Arc<Mutex<VecDeque<RequestLogEntry>>>) {
     let client = reqwest::Client::new();
     let core = PoolCore::new(&store);
     let pool = Arc::new(Mutex::new(core));
@@ -178,7 +182,7 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
         logs: logs.clone(),
         flows: FlowRegistry::default(),
         proxy_key: Some("test-key".to_string()),
-        ui_token: "unused".to_string(),
+        ui_token,
         usage,
     });
 
@@ -196,7 +200,15 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
         ))
         .with_state(state.clone());
 
-    let app = axum::Router::new().nest("/v1", v1)
+    let admin = axum::Router::new()
+        .route("/admin/api/state", axum::routing::get(underclass::ui::state))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            underclass::ui::require_ui_token,
+        ))
+        .with_state(state.clone());
+
+    let app = axum::Router::new().merge(admin).nest("/v1", v1)
         .layer(axum::middleware::from_fn(underclass::correlation::middleware))
         .with_state(state);
 
@@ -204,6 +216,24 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (format!("http://{addr}"), logs)
+}
+
+async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<VecDeque<RequestLogEntry>>>) {
+    spawn_app_with_ui_token(store, cooldown_ms, Some("unused".to_string())).await
+}
+
+#[tokio::test]
+async fn tokenless_admin_ui_mode_allows_local_admin_routes() {
+    let store = Arc::new(Store::in_memory().unwrap());
+    let (base, _) = spawn_app_with_ui_token(store, 400, None).await;
+
+    let response = reqwest::Client::new()
+        .get(format!("{base}/admin/api/state"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
 }
 
 #[tokio::test(flavor = "multi_thread")]
