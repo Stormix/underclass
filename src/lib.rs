@@ -14,3 +14,4 @@ pub mod proxy;
 pub mod store;
 pub mod tokens;
 pub mod ui;
+pub mod usage;

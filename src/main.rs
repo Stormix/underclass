@@ -1,5 +1,5 @@
 use underclass::provider::BackendMap;
-use underclass::{cli, codex, config, copilot, flows, logging, models, pool, proxy, store, tokens, ui};
+use underclass::{cli, codex, config, copilot, flows, logging, models, pool, proxy, store, tokens, ui, usage};
 
 use clap::{Parser, Subcommand};
 use std::collections::HashMap;
@@ -116,6 +116,12 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
     );
     let backends = Arc::new(backends);
 
+    let usage = Arc::new(usage::UsageService::new(
+        store.clone(),
+        tokens.clone(),
+        client.clone(),
+        pool.clone(),
+    ));
     let state = Arc::new(proxy::AppState {
         store: store.clone(),
         pool: pool.clone(),
@@ -126,6 +132,7 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         flows: flows::FlowRegistry::default(),
         proxy_key,
         ui_token: ui_token.clone(),
+        usage: usage.clone(),
     });
 
     {
@@ -144,6 +151,16 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         });
     }
 
+    {
+        let usage = usage.clone();
+        tokio::spawn(async move {
+            loop {
+                usage.refresh().await;
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            }
+        });
+    }
+
     refresh_copilot_catalogs_on_boot(&state).await;
     refresh_identities_on_boot(&state).await;
 
@@ -152,6 +169,17 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
         .route("/models", axum::routing::get(proxy::models))
         .route("/responses", axum::routing::post(proxy::infer))
         .route("/chat/completions", axum::routing::post(proxy::infer))
+        .route("/usage", axum::routing::get(usage::pooled))
+        .route("/api/codex/usage", axum::routing::get(usage::pooled))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            proxy::require_proxy_key,
+        ))
+        .with_state(state.clone());
+
+    let native_usage = axum::Router::new()
+        .route("/api/codex/usage", axum::routing::get(usage::pooled))
+        .route("/backend-api/wham/usage", axum::routing::get(usage::pooled))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             proxy::require_proxy_key,
@@ -191,6 +219,7 @@ async fn async_serve(bind_override: Option<String>) -> Result<(), Box<dyn std::e
             state.clone(),
             ui::require_ui_token,
         ))
+        .merge(native_usage)
         .route("/", axum::routing::get(ui::index))
         .nest("/v1", v1)
         .layer(axum::middleware::from_fn(underclass::correlation::middleware))

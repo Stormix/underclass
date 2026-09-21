@@ -1,8 +1,9 @@
 use hegel::generators as gs;
 use hegel::TestCase;
 use underclass::models::{Account, AccountStatus, BackendId, Outcome};
-use underclass::pool::{Decision, PoolCore, SelectError};
+use underclass::pool::{PoolCore, SelectError};
 use underclass::store::Store;
+use underclass::usage::{aggregate_windows, AccountUsage, AccountUsageState, UsageWindow};
 
 fn account(id: &str, backend: BackendId) -> Account {
     Account {
@@ -290,4 +291,44 @@ fn test_bindings_respect_ttl_and_cap(tc: TestCase) {
     let later = now + underclass::pool::BINDING_TTL_MS + 1;
     built.core.sweep(later);
     assert!(built.core.bindings().is_empty(), "expired bindings not evicted");
+}
+
+#[hegel::test]
+fn test_pooled_usage_stays_within_reported_account_bounds(tc: TestCase) {
+    let percentages: Vec<u8> = tc.draw(
+        gs::vecs(gs::integers::<u8>().min_value(0).max_value(100))
+            .min_size(1)
+            .max_size(12),
+    );
+    let accounts: Vec<Account> = (0..percentages.len())
+        .map(|index| account(&format!("usage-{index}"), BackendId::Codex))
+        .collect();
+    let mut states = std::collections::HashMap::new();
+    for (account, percent) in accounts.iter().zip(&percentages) {
+        states.insert(
+            account.id.clone(),
+            AccountUsageState::Available {
+                usage: AccountUsage {
+                    plan_type: "pro".into(),
+                    allowed: true,
+                    limit_reached: false,
+                    primary_window: Some(UsageWindow {
+                        used_percent: f64::from(*percent),
+                        limit_window_seconds: 18_000,
+                        reset_after_seconds: 60,
+                        reset_at: 2_000_000_000,
+                    }),
+                    secondary_window: None,
+                    fetched_at_ms: 0,
+                },
+            },
+        );
+    }
+    let refs: Vec<&Account> = accounts.iter().collect();
+    let pooled = aggregate_windows(&refs, &states, 0).remove(0);
+    let minimum = i32::from(*percentages.iter().min().unwrap());
+    let maximum = i32::from(*percentages.iter().max().unwrap());
+    assert!(pooled.used_percent >= minimum);
+    assert!(pooled.used_percent <= maximum);
+    assert_eq!(pooled.reporting_accounts, accounts.len());
 }

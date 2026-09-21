@@ -49,10 +49,15 @@
       </div>
     </div>
     <table id="accounts">
-      <thead><tr><th>label</th><th>backend</th><th>status</th><th>in-flight</th><th>sticky sessions</th><th>resets in</th><th></th></tr></thead>
+      <thead><tr><th>label</th><th>backend</th><th>status</th><th>plan</th><th>usage</th><th>in-flight</th><th>sticky sessions</th><th>resets in</th><th></th></tr></thead>
       <tbody></tbody>
     </table>
     <p class="muted">Healthy accounts serve requests. Quota exhaustion moves an account to <b>cooling</b> until its window resets — it stays configured. <b>auth error</b> accounts need re-login.</p>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0">Pooled Codex usage</h2>
+    <div id="pooledUsage" class="muted">Waiting for usage data…</div>
   </section>
 
   <section class="card">
@@ -155,6 +160,17 @@ function fmtReset(ms, row) {
   return s + 's';
 }
 
+function usageSummary(a) {
+  if (!a.usage || a.usage.state !== 'available') return a.usage?.state === 'unavailable' ? 'unavailable' : 'pending';
+  const windows = [a.usage.usage.primary_window, a.usage.usage.secondary_window].filter(Boolean);
+  if (!windows.length) return '—';
+  return windows.map(w => {
+    const hours = w.limit_window_seconds / 3600;
+    const label = hours >= 24 && hours % 24 === 0 ? (hours / 24) + 'd' : hours + 'h';
+    return label + ': ' + Math.round(w.used_percent) + '% used · resets ' + esc(new Date(w.reset_at * 1000).toLocaleString());
+  }).join('<br>') + (Date.now() - a.usage.usage.fetched_at_ms > 120000 ? ' · stale' : '');
+}
+
 async function loadState() {
   try {
     const res = await api('/admin/api/state');
@@ -165,6 +181,8 @@ async function loadState() {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${esc(a.label)}</td><td>${a.backend}</td>
         <td><span class="badge ${a.status}">${a.status}</span></td>
+        <td>${a.usage?.state === 'available' ? esc(a.usage.usage.plan_type) : '—'}</td>
+        <td>${usageSummary(a)}</td>
         <td>${a.inflight}</td><td>${a.sticky_sessions}</td>
         <td>${fmtReset(a.cooling_remaining_ms, a)}</td>
         <td class="row">
@@ -174,6 +192,20 @@ async function loadState() {
         </td>`;
       tbody.appendChild(tr);
     }
+    const pooled = data.pooled_usage || {};
+    const meta = pooled._underclass || {};
+    const limits = pooled.rate_limit || {};
+    const pooledWindows = [limits.primary_window, limits.secondary_window].filter(Boolean);
+    const coverage = `${meta.reporting_accounts || 0}/${meta.eligible_accounts || 0} accounts reporting`;
+    const estimate = pooledWindows.length
+      ? pooledWindows.map(w => {
+          const hours = w.limit_window_seconds / 3600;
+          const label = hours >= 24 && hours % 24 === 0 ? `${hours / 24}d` : `${hours}h`;
+          const count = (meta.window_coverage || []).find(c => c.limit_window_seconds === w.limit_window_seconds)?.reporting_accounts || 0;
+          return `${label}: ${w.used_percent}% used (${count} accounts)`;
+        }).join(' · ')
+      : 'No pooled usage available';
+    document.getElementById('pooledUsage').textContent = `${estimate} · ${coverage} · equal-account estimate${meta.stale ? ' · stale' : ''}`;
     const rbody = document.querySelector('#requests tbody');
     rbody.innerHTML = '';
     for (const r of data.requests.slice(0, 50)) {

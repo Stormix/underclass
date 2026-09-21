@@ -29,6 +29,7 @@ pub struct AppState {
     pub flows: crate::flows::FlowRegistry,
     pub proxy_key: Option<String>,
     pub ui_token: String,
+    pub usage: Arc<crate::usage::UsageService>,
 }
 
 pub fn extract_sticky_key(body: &Value, session_header: Option<&str>) -> Option<String> {
@@ -377,7 +378,16 @@ async fn attempt_account(
     if !status.is_success() {
         let resp_headers = response.headers().clone();
         let body_text = response.text().await.unwrap_or_default();
-        let outcome = backend.classify(status.as_u16(), &body_text, &resp_headers, now_ms());
+        let mut outcome = backend.classify(status.as_u16(), &body_text, &resp_headers, now_ms());
+        if matches!(outcome, Outcome::QuotaExhausted { .. }) {
+            if let Some(until_ms) = state
+                .usage
+                .authoritative_reset_ms(&selection.account_id, now_ms())
+                .await
+            {
+                outcome = Outcome::QuotaExhausted { until_ms };
+            }
+        }
         if let Some(new_status) = {
             let mut pool = state.pool.lock().unwrap();
             pool.report(&selection.account_id, outcome.clone())

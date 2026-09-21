@@ -11,6 +11,7 @@ use underclass::provider::BackendMap;
 use underclass::proxy::AppState;
 use underclass::store::Store;
 use underclass::tokens::TokenManager;
+use underclass::usage::UsageService;
 
 #[derive(Default)]
 struct MockState {
@@ -69,12 +70,36 @@ async fn mock_responses(
     }
 }
 
+async fn mock_usage(headers: axum::http::HeaderMap) -> impl IntoResponse {
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .unwrap_or_default();
+    let used = if bearer == "tok-acc-1" { 20 } else { 60 };
+    axum::Json(serde_json::json!({
+        "plan_type": "pro",
+        "rate_limit": {
+            "allowed": true,
+            "limit_reached": false,
+            "primary_window": {
+                "used_percent": used,
+                "limit_window_seconds": 604800,
+                "reset_after_seconds": 3600,
+                "reset_at": 2000000000
+            },
+            "secondary_window": null
+        }
+    }))
+}
+
 async fn mock_upstream() -> &'static Arc<Mutex<MockState>> {
     static STATE: OnceLock<Arc<Mutex<MockState>>> = OnceLock::new();
     static URL: OnceLock<String> = OnceLock::new();
     STATE.get_or_init(Default::default);
     if URL.get().is_none() {
         let app = axum::Router::new()
+            .route("/usage", axum::routing::get(mock_usage))
             .fallback(mock_responses)
             .with_state(STATE.get().unwrap().clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -82,6 +107,7 @@ async fn mock_upstream() -> &'static Arc<Mutex<MockState>> {
         unsafe {
             std::env::set_var("UNDERCLASS_CODEX_UPSTREAM", format!("http://{addr}"));
             std::env::set_var("UNDERCLASS_COPILOT_UPSTREAM", format!("http://{addr}"));
+            std::env::set_var("UNDERCLASS_USAGE_UPSTREAM", format!("http://{addr}/usage"));
         }
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         URL.set(format!("http://{addr}")).ok();
@@ -137,6 +163,12 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
     backends.insert(BackendId::Codex, Arc::new(CodexBackend { cooldown_ms }));
     backends.insert(BackendId::Copilot, Arc::new(CopilotBackend { cooldown_ms }));
     let logs: Arc<Mutex<VecDeque<RequestLogEntry>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let usage = Arc::new(UsageService::new(
+        store.clone(),
+        tokens.clone(),
+        client.clone(),
+        pool.clone(),
+    ));
     let state = Arc::new(AppState {
         store,
         pool,
@@ -147,6 +179,7 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
         flows: FlowRegistry::default(),
         proxy_key: Some("test-key".to_string()),
         ui_token: "unused".to_string(),
+        usage,
     });
 
     let v1 = axum::Router::new()
@@ -156,6 +189,7 @@ async fn spawn_app(store: Arc<Store>, cooldown_ms: i64) -> (String, Arc<Mutex<Ve
             "/chat/completions",
             axum::routing::post(underclass::proxy::infer),
         )
+        .route("/usage", axum::routing::get(underclass::usage::pooled))
         .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             underclass::proxy::require_proxy_key,
@@ -288,6 +322,26 @@ async fn e2e_full_pool_story() {
         assert_eq!(entry.backend.as_deref(), Some("codex"));
         assert_eq!(entry.status, 200);
     }
+
+    // subscription usage is aggregated without revealing account credentials
+    let unauthorized_usage = reqwest::Client::new()
+        .get(format!("{base}/v1/usage"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized_usage.status(), 401);
+    let usage = reqwest::Client::new()
+        .get(format!("{base}/v1/usage"))
+        .bearer_auth("test-key")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(usage.status(), 200);
+    let usage: serde_json::Value = usage.json().await.unwrap();
+    assert_eq!(usage["plan_type"], "pro");
+    assert_eq!(usage["rate_limit"]["primary_window"]["used_percent"], 20);
+    assert_eq!(usage["_underclass"]["eligible_accounts"], 1);
+    assert_eq!(usage["_underclass"]["reporting_accounts"], 1);
 
     // phase 7: 401 on one backend fails over and marks auth_error
     let store2 = Arc::new(Store::in_memory().unwrap());

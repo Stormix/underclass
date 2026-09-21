@@ -38,7 +38,11 @@ pub async fn require_ui_token(
     next.run(req).await
 }
 
-fn account_view(state: &AppState, account: &crate::models::Account) -> serde_json::Value {
+fn account_view(
+    state: &AppState,
+    account: &crate::models::Account,
+    usage: Option<&crate::usage::AccountUsageState>,
+) -> serde_json::Value {
     let pool = state.pool.lock().unwrap();
     let inflight = pool
         .accounts
@@ -62,15 +66,17 @@ fn account_view(state: &AppState, account: &crate::models::Account) -> serde_jso
         "account_id": account.account_id,
         "enterprise_url": account.enterprise_url,
         "created_at": account.created_at,
+        "usage": usage,
     })
 }
 
 pub async fn state(State(state): State<Arc<AppState>>) -> Response {
+    let usage = state.usage.snapshot().await;
     let accounts: Vec<serde_json::Value> = state
         .store
         .list_accounts()
         .iter()
-        .map(|a| account_view(&state, a))
+        .map(|a| account_view(&state, a, usage.get(&a.id)))
         .collect();
     let requests: Vec<RequestLogEntry> = state.logs.lock().unwrap().iter().rev().cloned().collect();
     let catalog: serde_json::Map<String, serde_json::Value> = BackendId::all()
@@ -84,6 +90,7 @@ pub async fn state(State(state): State<Arc<AppState>>) -> Response {
         .collect();
     Json(json!({
         "accounts": accounts,
+        "pooled_usage": crate::usage::pooled_value(&state.store.list_accounts(), &usage, now_ms()),
         "requests": requests,
         "catalog": catalog,
         "now_ms": now_ms(),
